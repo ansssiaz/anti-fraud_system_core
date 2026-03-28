@@ -20,6 +20,8 @@ features/
 *.npy
 *.npz
 *.parquet
+*.joblib
+*.cbm
 
 # VS Code
 .vscode/
