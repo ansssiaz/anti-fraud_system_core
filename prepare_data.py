@@ -20,9 +20,13 @@ def prepare_data():
     ]
     
     pretest_path = "data/pretest.parquet"
+    test_path = "data/test.parquet"
+    
+    all_train_features_save_path = "faetures/train_features.parquet"
+    
     labels_path = "data/train_labels.parquet"
     
-    all_paths = pretrain_paths + train_paths + [pretest_path]
+    all_paths = pretrain_paths + train_paths + [pretest_path] + [test_path]
     
     labels = pl.read_parquet(labels_path)
 
@@ -34,7 +38,8 @@ def prepare_data():
         
         if prepared_save_path.exists():
             log(f"Skip prepared: {prepared_save_path}")
-            prepared_paths.append(prepared_save_path)
+            if p != test_path:
+                prepared_paths.append(prepared_save_path)
             continue
         
         start = time.time()
@@ -52,7 +57,8 @@ def prepare_data():
         
         log(f"Saved prepared: {prepared_save_path} in {time.time() - start:.2f}s")
         
-        prepared_paths.append(prepared_save_path)
+        if p != test_path:
+            prepared_paths.append(prepared_save_path)
         
     # Генерация глобальных фич на pretrain + train + pretest
     global_features_save_path = Path("features/global_features")
@@ -86,7 +92,7 @@ def prepare_data():
     
     # Генерация фич для train
     target_encoding_cols = ["mcc_code", "event_type_nm", "channel_indicator_type", "pos_cd"]
-
+    
     train_features_save_paths = []
     
     for p in tqdm(train_paths, desc="Building train features"):
@@ -105,21 +111,61 @@ def prepare_data():
         df = df.join(labels, on=["customer_id", "event_id"], how="left")
         
         df = build_features(df, global_features)
-        log_df(df, "Feature engineering done")
-        
-        df = target_encode(
-            df_train=df,
-            df_apply = df,
-            cols = target_encoding_cols,
-            alpha = 50
-        )
+        log_df(df, "Train feature engineering done")
         
         train_features_save_path.parent.mkdir(exist_ok=True)
         df.write_parquet(train_features_save_path)
         
         log(f"Saved train features: {train_features_save_path} in {time.time() - start:.2f}s")
-        
         train_features_save_paths.append(train_features_save_path)
+    
+    # Объединение train dataframes, target encoding
+    if all_train_features_save_path.exists():
+        log(f"Skip target encoding train: {all_train_features_save_path}")
+    else:
+        start = time.time()
+        
+        dfs_train = [pl.read_parquet(p) for p in train_features_save_paths]
+        df_train_all= pl.concat(dfs_train)
+        df_train_all = df_train_all.filter(pl.col("target").is_not_null())
+            
+        df_train_all = target_encode(
+            df_train=df_train_all,
+            df_apply = df_train_all,
+            cols = target_encoding_cols,
+            alpha = 50
+        )
+        
+        all_train_features_save_path.parent.mkdir(exist_ok=True)
+        df_train_all.write_parquet(all_train_features_save_path)
+        
+        log(f"Saved all train features: {all_train_features_save_path} in {time.time() - start:.2f}s")
+            
+    # Генерация фич для test
+    test_features_save_path = Path("features") / Path(test_path).name.replace(".parquet", "_features.parquet")
+        
+    if test_features_save_path.exists():
+        log(f"Skip test features: {test_features_save_path}")
+    else:
+        start = time.time()
+        
+        df_test = pl.read_parquet(Path("prepared") / Path(test_path).name)
+        log_df(df_test, f"Loaded test {test_path}")
+        
+        df_test = build_features(df_test, global_features)
+        log_df(df_test, "Test feature engineering done")
+        
+        df_test = target_encode(
+            df_train=df_train_all,
+            df_apply = df_test,
+            cols = target_encoding_cols,
+            alpha = 50
+        )
+        
+        test_features_save_path.parent.mkdir(exist_ok=True)
+        df_test.write_parquet(test_features_save_path)
+        
+        log(f"Saved test features: {test_features_save_path} in {time.time() - start:.2f}s")
 
     # Target-encoding для pretest
     # pretest_features_save_path = Path("features/pretest_features.parquet")
@@ -142,4 +188,4 @@ def prepare_data():
     
     #return train_features_save_paths, pretest_features_save_path
     
-    return train_features_save_paths
+    return all_train_features_save_path, test_features_save_path
